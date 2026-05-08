@@ -3,7 +3,6 @@ name: Windows Auto Release
 on:
   push:
     tags:
-      - 'v*-mod'          # 匹配 v1.0.0-mod 等
       - 'mod-v*'          # 匹配 mod-v1.0.0
 
 jobs:
@@ -50,14 +49,13 @@ jobs:
       - name: Find and upload .fpk
         shell: pwsh
         run: |
-          $fpkFile = Get-ChildItem -Path . -Filter "*.fpk" -File | Select-Object -First 1
+          $fpkFile = Get-ChildItem -Path "dist/*.fpk" -File | Select-Object -First 1
           if (-not $fpkFile) {
-            Write-Error "未找到 .fpk 文件"
+            Write-Error "未找到 dist/*.fpk 文件"
             exit 1
           }
           Write-Host "找到安装包: $($fpkFile.Name)"
           echo "FPK_PATH=$($fpkFile.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
       - name: Create Release and Upload
         uses: softprops/action-gh-release@v2
         with:

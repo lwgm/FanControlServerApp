@@ -30,13 +30,6 @@ func resolveConfigPath() string {
 	return "config.json"
 }
 
-func resolveTokenPath() string {
-	if tokenDir := os.Getenv("TRIM_PKGVAR"); tokenDir != "" {
-		return filepath.Join(tokenDir, "run", "api_token")
-	}
-	return "run/api_token"
-}
-
 func listenAddr() string {
 	bind := "127.0.0.1"
 	if os.Getenv("external_access") == "true" {
@@ -47,14 +40,6 @@ func listenAddr() string {
 		port = "19527"
 	}
 	return bind + ":" + port
-}
-
-func requireAuthFromEnv() bool {
-	v := os.Getenv("require_auth")
-	if v == "false" {
-		return false
-	}
-	return true
 }
 
 func main() {
@@ -75,24 +60,12 @@ func main() {
 		logging.SetLevel(store.Get().Global.LogLevel)
 	}
 
-	tokenPath := resolveTokenPath()
-	requireAuth := requireAuthFromEnv()
-	auth, err := api.NewAuthManager(tokenPath, requireAuth)
-	if err != nil {
-		logrus.Fatalf("[主程序] 初始化鉴权失败：%v", err)
-	}
-	if requireAuth {
-		logrus.Info("[主程序] API 鉴权：已启用（Bearer + 首次确认）")
-	} else {
-		logrus.Warn("[主程序] API 鉴权：已关闭（require_auth=false）；任何能访问 HTTP 端口的客户端均可操作风扇配置")
-	}
-
 	controller := service.NewController(store)
 	if err = controller.Start(); err != nil {
 		logrus.Fatalf("[主程序] 启动控制器失败：%v", err)
 	}
 
-	router := api.NewRouter(webFS, controller, store, auth)
+	router := api.NewRouter(webFS, controller, store)
 	addr := listenAddr()
 	server := &http.Server{
 		Addr:    addr,
@@ -101,9 +74,6 @@ func main() {
 
 	go func() {
 		logrus.Infof("[主程序] HTTP 服务已监听，地址：%s，配置文件：%q", addr, cfgPath)
-		if requireAuth && !auth.IsConfirmed() {
-			logrus.Warn("[主程序] API Key 尚未确认，请打开浏览器完成初始设置")
-		}
 		if err = server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logrus.Fatalf("[主程序] HTTP 服务异常退出：%v", err)
 		}

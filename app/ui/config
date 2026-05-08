@@ -3,10 +3,9 @@
         "FanControlServer.Application": {
             "title": "Fan Control Server",
             "icon": "images/icon_{0}.png",
-            "type": "url",
+            "type": "iframe",
             "protocol": "",
-            "port": "${service_port}",
-            "url": "/",
+            "url": "/cgi/ThirdParty/FanControlServer/index.cgi/",
             "allUsers": false
         }
     }

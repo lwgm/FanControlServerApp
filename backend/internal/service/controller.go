@@ -25,16 +25,19 @@ type Controller struct {
 	telemetry           model.Telemetry
 	history             model.HistorySeries
 	lastPWM             map[string]int
-	lastValidPWM        map[string]int // 滞回区间保留的最后有效PWM
+	lastValidPWM        map[string]int          // 滞回区间保留的最后有效PWM
+	lastAlgoTemp        map[string]float64      // 算法最后使用的温度（EMA平滑值/Standard最后应用温度）
+	algoTempHistory     map[string][]float64    // Standard算法：温度历史缓冲区（最新在末尾）
+	lastPWMSetTime      map[string]time.Time    // 最近一次写入PWM的时间（最小保持时间用）
 	subs                map[chan model.Telemetry]struct{}
 	stopCh              chan struct{}
 	stopped             bool
 	loopDoneCh          chan struct{}
 	startTime           time.Time
-	lastCPUHistoryTime  time.Time // CPU 历史上次记录时间
-	lastGPUHistoryTime  time.Time // GPU 历史上次记录时间
-	lastDiskHistoryTime time.Time // 磁盘历史上次记录时间
-	lastFanHistoryTime  time.Time // 风扇历史上次记录时间
+	lastCPUHistoryTime  time.Time
+	lastGPUHistoryTime  time.Time
+	lastDiskHistoryTime time.Time
+	lastFanHistoryTime  time.Time
 }
 
 func NewController(store *Store) *Controller {
@@ -46,6 +49,9 @@ func NewController(store *Store) *Controller {
 		gpu:          driver.NewGPUDriver(),
 		lastPWM:      map[string]int{},
 		lastValidPWM: map[string]int{},
+		lastAlgoTemp: map[string]float64{},
+		algoTempHistory: map[string][]float64{},
+		lastPWMSetTime: map[string]time.Time{},
 		subs:         map[chan model.Telemetry]struct{}{},
 		stopCh:       make(chan struct{}),
 		loopDoneCh:   make(chan struct{}),
@@ -158,6 +164,7 @@ func (c *Controller) collectAndApply(cfg model.Config) model.Telemetry {
 			Source:    fan.Source,
 			Mode:      fan.Mode,
 			TargetPWM: target,
+			Algorithm: fan.Algorithm,
 		})
 		//  前端尚未展示风扇历史图表，暂时禁用采集以减少开销
 		// c.pushFanHistory(fan.ID, now, rpm, applied)
@@ -214,28 +221,109 @@ func (c *Controller) readDisks() model.DiskPayload {
 }
 
 func (c *Controller) calculateTargetPWM(fan model.FanConfig, global model.GlobalConfig, cpuTemp, gpuTemp *float64, disks model.DiskPayload) (int, *float64) {
+	// 不论手动/自动模式，都先解析温度并应用算法平滑，保持算法状态连贯
+	temp := c.resolveSourceTemp(fan.Source, cpuTemp, gpuTemp, disks)
+
+	// 温度有效性过滤：传感器异常（<5°C或>110°C）时视为无效
+	if temp != nil && (*temp < 5 || *temp > 110) {
+		logrus.Warnf("[控制器] 风扇 %s 温度%.1f°C 超出有效范围(5~110°C)，忽略此周期", fan.Name, *temp)
+		temp = nil
+	}
+
+	var smoothedTemp float64
+	if temp != nil {
+		algo := GetAlgorithm(fan.Algorithm)
+
+		// 构建温度历史缓冲（Standard 算法需要）
+		historyBufSize := 0
+		if global.ResponseDelayMs > 0 && global.UpdateIntervalMS > 0 {
+			historyBufSize = (global.ResponseDelayMs + global.UpdateIntervalMS - 1) / global.UpdateIntervalMS
+		}
+		if historyBufSize > 0 {
+			c.algoTempHistory[fan.ID] = append(c.algoTempHistory[fan.ID], *temp)
+			if len(c.algoTempHistory[fan.ID]) > historyBufSize {
+				c.algoTempHistory[fan.ID] = c.algoTempHistory[fan.ID][len(c.algoTempHistory[fan.ID])-historyBufSize:]
+			}
+		}
+
+		input := TempFilterInput{
+			RawTemp:         *temp,
+			LastAppliedTemp: c.lastAlgoTemp[fan.ID],
+			TempHistory:     c.algoTempHistory[fan.ID],
+			Deviance:        global.TempDeviance,
+		}
+		smoothedTemp = algo.FilterTemp(input)
+		c.lastAlgoTemp[fan.ID] = smoothedTemp
+	}
+
+	// 紧急温度保护（使用平滑后的温度判断）
+	if temp != nil && smoothedTemp >= global.EmergencyTemp {
+		logrus.Warnf("[控制器] 风扇 %s 平滑温度%.1f°C ≥ 紧急温度%.1f°C，全速!", fan.Name, smoothedTemp, global.EmergencyTemp)
+		return 255, temp
+	}
+
 	if fan.Mode == model.FanModeManual {
-		logrus.Debugf("[控制器] 风扇 %s 手动模式 PWM=%d", fan.Name, fan.ManualPWM)
+		logrus.Debugf("[控制器] 风扇 %s 手动模式 PWM=%d | 平滑温度=%.1f°C", fan.Name, fan.ManualPWM, smoothedTemp)
 		return clampPWM(fan.ManualPWM), nil
 	}
 
-	temp := c.resolveSourceTemp(fan.Source, cpuTemp, gpuTemp, disks)
 	if temp == nil {
 		logrus.Warnf("[控制器] 风扇 %s 无法获取温度(源=%s)，跳过", fan.Name, fan.Source)
 		return 0, nil
 	}
-	if *temp >= global.EmergencyTemp {
-		logrus.Warnf("[控制器] 风扇 %s 温度%.1f°C ≥ 紧急温度%.1f°C，全速!", fan.Name, *temp, global.EmergencyTemp)
-		return 255, temp
+
+	// 用平滑后的温度查曲线
+	basePWM := interpolateCurve(fan.Curve, smoothedTemp)
+
+	// 边界滞回：在曲线分界点附近做滞回，防止温度临界时PWM频繁跳变
+	curPWM := c.lastPWM[fan.ID]
+	pwmAfterHysteresis := c.applyBoundaryHysteresis(fan.ID, fan.Curve, *temp, basePWM, curPWM, global.StopHysteresis)
+
+	// 停转滞回：温度低于曲线首点时防止频繁启停
+	pwm := c.applyStopHysteresis(fan.ID, fan.Curve, *temp, pwmAfterHysteresis, global.StopHysteresis)
+
+	logrus.Debugf("[控制器] 风扇 %s | 原始温度=%.1f°C | 平滑温度=%.1f°C | 算法=%s | 曲线PWM=%d | 边界滞回=%d | 最终PWM=%d",
+		fan.Name, *temp, smoothedTemp, fan.Algorithm, basePWM, pwmAfterHysteresis, pwm)
+	return clampPWM(pwm), temp
+}
+
+// applyBoundaryHysteresis 曲线分界点滞回逻辑
+// 在曲线各点的温度附近（±hysteresis）保持当前PWM，
+// 防止温度在曲线分界点附近徘徊时PWM频繁跳变
+func (c *Controller) applyBoundaryHysteresis(fanID string, curve []model.CurvePoint, temp float64, targetPWM, currentPWM int, hysteresis float64) int {
+	if len(curve) < 2 || hysteresis <= 0 || targetPWM == currentPWM {
+		return targetPWM
 	}
 
-	// 计算曲线基础 PWM 值
-	basePWM := interpolateCurve(fan.Curve, *temp)
+	// 获取当前实际PWM
+	c.mu.RLock()
+	actualPWM, exists := c.lastPWM[fanID]
+	c.mu.RUnlock()
+	if !exists {
+		actualPWM = currentPWM
+	}
 
-	// 滞回逻辑：防止温度临界点时频繁启停
-	pwm := c.applyStopHysteresis(fan.ID, fan.Curve, *temp, basePWM, global.StopHysteresis)
-	logrus.Debugf("[控制器] 风扇 %s | 温度=%.1f°C | 曲线PWM=%d | 最终PWM=%d", fan.Name, *temp, basePWM, pwm)
-	return clampPWM(pwm), temp
+	if targetPWM > actualPWM {
+		// 温度上升：检查每个曲线点，如果正在跨越某个点且温度未超过该点+hysteresis，保持当前值
+		for _, pt := range curve {
+			if pt.Temp <= temp && temp < pt.Temp+hysteresis {
+				logrus.Debugf("[边界滞回] 上升: 温度%.1f°C在边界%.1f°C~%.1f°C，保持PWM=%d",
+					temp, pt.Temp, pt.Temp+hysteresis, actualPWM)
+				return actualPWM
+			}
+		}
+	} else {
+		// 温度下降：如果正在跨越某个点且温度未低于该点-hysteresis，保持当前值
+		for _, pt := range curve {
+			if pt.Temp-hysteresis < temp && temp <= pt.Temp {
+				logrus.Debugf("[边界滞回] 下降: 温度%.1f°C在边界%.1f°C~%.1f°C，保持PWM=%d",
+					temp, pt.Temp-hysteresis, pt.Temp, actualPWM)
+				return actualPWM
+			}
+		}
+	}
+
+	return targetPWM
 }
 
 // applyStopHysteresis 滞回停转逻辑
@@ -344,6 +432,26 @@ func (c *Controller) applyPWM(fan model.FanConfig, global model.GlobalConfig, ta
 		c.lastPWM[fan.ID] = current
 	}
 
+	// 最小保持时间：距离上次写入不足指定秒数则不调整
+	if global.MinHoldSec > 0 {
+		c.mu.RLock()
+		lastSet, exists := c.lastPWMSetTime[fan.ID]
+		c.mu.RUnlock()
+		if exists && time.Since(lastSet).Seconds() < float64(global.MinHoldSec) {
+			return current
+		}
+	}
+
+	// 速率限制：单次变化不超过 MaxStep
+	if global.MaxStep > 0 {
+		delta := target - current
+		if delta > global.MaxStep {
+			target = current + global.MaxStep
+		} else if delta < -global.MaxStep {
+			target = current - global.MaxStep
+		}
+	}
+
 	if abs(target-current) < global.PWMDeadzone {
 		return current
 	}
@@ -356,6 +464,9 @@ func (c *Controller) applyPWM(fan model.FanConfig, global model.GlobalConfig, ta
 
 	// 更新缓存
 	c.lastPWM[fan.ID] = target
+	c.mu.Lock()
+	c.lastPWMSetTime[fan.ID] = time.Now()
+	c.mu.Unlock()
 	logrus.Infof("[PWM] 风扇 %s: PWM %d(%d%%) → %d(%d%%)", fan.Name, current, current*100/255, target, target*100/255)
 	return target
 }
@@ -386,6 +497,19 @@ func (c *Controller) SetFanMode(id string, mode model.FanMode) error {
 	for i := range cfg.Fans {
 		if cfg.Fans[i].ID == id {
 			cfg.Fans[i].Mode = mode
+			if mode == model.FanModeManual {
+				// 切换到手动模式时，立即写入当前手动 PWM 值
+				fan := cfg.Fans[i]
+				if err := c.hwmon.WritePWM(fan.EnablePath, fan.PWMPath, fan.ManualPWM); err != nil {
+					logrus.Warnf("[切换模式] 风扇 %s 手动模式写入失败: %v", fan.ID, err)
+				} else {
+					c.lastPWM[fan.ID] = fan.ManualPWM
+					c.mu.Lock()
+					c.lastPWMSetTime[fan.ID] = time.Now()
+					c.mu.Unlock()
+					logrus.Infof("[切换模式] 风扇 %s → 手动 PWM=%d", fan.Name, fan.ManualPWM)
+				}
+			}
 			return c.store.Save(cfg)
 		}
 	}
@@ -403,12 +527,39 @@ func (c *Controller) SetFanSource(id, source string) error {
 	return errors.New("未找到指定风扇")
 }
 
+func (c *Controller) SetFanAlgorithm(id string, algo model.AlgorithmType) error {
+	cfg := c.store.Get()
+	for i := range cfg.Fans {
+		if cfg.Fans[i].ID == id {
+			cfg.Fans[i].Algorithm = algo
+			// 切换算法时重置该风扇的温度状态
+			c.mu.Lock()
+			delete(c.lastAlgoTemp, id)
+			delete(c.algoTempHistory, id)
+			c.mu.Unlock()
+			return c.store.Save(cfg)
+		}
+	}
+	return errors.New("未找到指定风扇")
+}
+
 func (c *Controller) SetFanManualPWM(id string, pwm int) error {
 	cfg := c.store.Get()
 	for i := range cfg.Fans {
 		if cfg.Fans[i].ID == id {
 			cfg.Fans[i].ManualPWM = clampPWM(pwm)
 			cfg.Fans[i].Mode = model.FanModeManual
+			// 立即写入硬件，不等待控制器循环（绕过限速）
+			fan := cfg.Fans[i]
+			if err := c.hwmon.WritePWM(fan.EnablePath, fan.PWMPath, fan.ManualPWM); err != nil {
+				logrus.Warnf("[手动PWM] 风扇 %s 直接写入失败: %v", fan.ID, err)
+			} else {
+				c.lastPWM[fan.ID] = fan.ManualPWM
+				c.mu.Lock()
+				c.lastPWMSetTime[fan.ID] = time.Now()
+				c.mu.Unlock()
+				logrus.Infof("[手动PWM] 风扇 %s → PWM=%d", fan.Name, fan.ManualPWM)
+			}
 			return c.store.Save(cfg)
 		}
 	}
@@ -450,6 +601,9 @@ func (c *Controller) RemoveFan(id string) error {
 	delete(c.history.Fans, id)
 	delete(c.lastPWM, id)
 	delete(c.lastValidPWM, id)
+	delete(c.lastAlgoTemp, id)
+	delete(c.algoTempHistory, id)
+	delete(c.lastPWMSetTime, id)
 	c.mu.Unlock()
 	return nil
 }
@@ -500,9 +654,9 @@ func (c *Controller) autoDiscoverFansOnFirstRun() {
 			Source:     "cpu",
 			Curve: []model.CurvePoint{
 				{Temp: 35, PWM: 80},
-				{Temp: 45, PWM: 120},
-				{Temp: 60, PWM: 180},
-				{Temp: 75, PWM: 255},
+				{Temp: 55, PWM: 140},
+				{Temp: 75, PWM: 200},
+				{Temp: 100, PWM: 255},
 			},
 		})
 	}

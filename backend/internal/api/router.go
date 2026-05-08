@@ -19,15 +19,13 @@ import (
 type handler struct {
 	controller *service.Controller
 	store      *service.Store
-	auth       *AuthManager
 	upgrader   websocket.Upgrader
 }
 
-func NewRouter(staticFS fs.FS, controller *service.Controller, store *service.Store, auth *AuthManager) *gin.Engine {
+func NewRouter(staticFS fs.FS, controller *service.Controller, store *service.Store) *gin.Engine {
 	h := &handler{
 		controller: controller,
 		store:      store,
-		auth:       auth,
 		upgrader:   websocket.Upgrader{},
 	}
 
@@ -35,12 +33,6 @@ func NewRouter(staticFS fs.FS, controller *service.Controller, store *service.St
 
 	var indexData []byte
 	if staticFS != nil {
-		if sub, err := fs.Sub(staticFS, "assets"); err == nil {
-			router.StaticFS("/assets", http.FS(sub))
-		} else {
-			logrus.Warn("assets directory not found in embedded filesystem, static assets will not be served")
-		}
-
 		var err error
 		indexData, err = fs.ReadFile(staticFS, "index.html")
 		if err != nil {
@@ -52,15 +44,7 @@ func NewRouter(staticFS fs.FS, controller *service.Controller, store *service.St
 		})
 	}
 
-	authGroup := router.Group("/api/auth")
-	{
-		authGroup.GET("/status", h.authStatus)
-		authGroup.GET("/setup", h.authSetupGet)
-		authGroup.POST("/setup", h.authSetupPost)
-		authGroup.POST("/reset", h.authReset)
-	}
-
-	apiGroup := router.Group("/api", auth.Middleware())
+	apiGroup := router.Group("/api")
 	{
 		apiGroup.GET("/device/info", h.deviceInfo)
 		apiGroup.GET("/device/scan", h.deviceScan)
@@ -69,6 +53,7 @@ func NewRouter(staticFS fs.FS, controller *service.Controller, store *service.St
 		apiGroup.POST("/fan/set", h.setFanPWM)
 		apiGroup.POST("/fan/mode", h.setFanMode)
 		apiGroup.POST("/fan/source", h.setFanSource)
+		apiGroup.POST("/fan/algorithm", h.setFanAlgorithm)
 		apiGroup.POST("/fan/curve", h.setFanCurve)
 		apiGroup.POST("/fan/remove", h.removeFan)
 		apiGroup.POST("/global/config", h.setGlobalConfig)
@@ -187,6 +172,24 @@ func (h *handler) setFanSource(c *gin.Context) {
 		return
 	}
 	if abortWithError(c, http.StatusBadRequest, h.controller.SetFanSource(req.ID, req.Source)) {
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (h *handler) setFanAlgorithm(c *gin.Context) {
+	var req struct {
+		ID        string              `json:"id" binding:"required"`
+		Algorithm model.AlgorithmType `json:"algorithm" binding:"required"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	if req.Algorithm != model.AlgorithmIdentity && req.Algorithm != model.AlgorithmStandard && req.Algorithm != model.AlgorithmEMA {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的算法类型，可选: identity, standard, ema"})
+		return
+	}
+	if abortWithError(c, http.StatusBadRequest, h.controller.SetFanAlgorithm(req.ID, req.Algorithm)) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})

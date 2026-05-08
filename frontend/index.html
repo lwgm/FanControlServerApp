@@ -3,6 +3,19 @@
 <head>
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <script>
+        // 在页面绘制前同步设置主题，防止闪烁
+        (function() {
+            var theme = localStorage.getItem("fancontrol_theme");
+            if (theme === "light" || theme === "dark") {
+                document.documentElement.setAttribute("data-theme", theme);
+            } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+                document.documentElement.setAttribute("data-theme", "dark");
+            } else {
+                document.documentElement.setAttribute("data-theme", "light");
+            }
+        })();
+    </script>
     <title>FanControlServerApp - 风扇与温度管理</title>
     <style>
         :root {
@@ -67,18 +80,18 @@
         }
 
         body {
-            background-color: #0b0e14;
-            color: #e2e8f0;
+            background-color: var(--bg-body);
+            color: var(--text-secondary);
             font-family: "Inter", system-ui, -apple-system, sans-serif;
             overflow-x: hidden;
         }
 
         .glass-card {
-            background: rgba(30, 41, 59, 0.4);
+            background: var(--bg-card);
             backdrop-filter: blur(16px);
-            border: 1px solid rgba(255, 255, 255, 0.08);
+            border: 1px solid var(--border-muted-50);
             border-radius: 1.25rem;
-            box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+            box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.3);
             transition: all 0.3s ease;
         }
 
@@ -91,21 +104,18 @@
         }
 
         @keyframes spin {
-            from {
-                transform: rotate(0deg);
-            }
-            to {
-                transform: rotate(360deg);
-            }
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
         }
 
         input[type="range"] {
             -webkit-appearance: none;
+            appearance: none;
             background: transparent;
         }
 
         input[type="range"]::-webkit-slider-runnable-track {
-            background: #1e293b;
+            background: var(--bg-surface-elevated);
             height: 8px;
             border-radius: 4px;
         }
@@ -121,7 +131,6 @@
             box-shadow: 0 0 15px rgba(14, 165, 233, 0.6);
         }
 
-        /* 所有 number 输入框去掉上下箭头 */
         input[type="number"]::-webkit-inner-spin-button,
         input[type="number"]::-webkit-outer-spin-button {
             -webkit-appearance: none;
@@ -192,6 +201,16 @@
         </div>
     </div>
     <div class="flex flex-wrap gap-3 items-center">
+        <!-- 主题切换 -->
+        <button
+                type="button"
+                id="btn-theme"
+                class="px-3 py-2 rounded-xl bg-slate-800 border border-slate-600 text-slate-400 hover:text-sky-400 hover:border-sky-500/40 transition-all"
+                title="切换主题"
+                aria-label="切换主题"
+        >
+            <iconify-icon class="text-lg" id="theme-icon" icon="mdi:theme-light-dark"></iconify-icon>
+        </button>
         <button
                 type="button"
                 id="btn-refresh"
@@ -199,11 +218,9 @@
         >
             刷新状态
         </button>
-        <div class="glass-card px-4 py-2 flex items-center gap-3 border-l-4 border-l-sky-500">
-            <div class="text-right">
-                <div class="text-[10px] text-slate-500 uppercase font-bold">实时通道</div>
-                <div class="text-sky-400 text-sm font-mono" id="ws-text">未连接</div>
-            </div>
+        <div class="glass-card px-4 py-2 flex items-center gap-2 border-l-4 border-l-sky-500 text-sm">
+            <span class="text-[10px] text-slate-500 uppercase font-bold">轮询</span>
+            <span class="text-sky-400 font-mono" id="ws-text">等待中…</span>
         </div>
     </div>
 </header>
@@ -245,7 +262,7 @@
                 <!-- SVG 圆环 -->
                 <div class="relative w-20 h-20 flex-shrink-0">
                     <svg class="w-full h-full -rotate-90" viewBox="0 0 36 36">
-                        <circle cx="18" cy="18" r="15.5" fill="none" stroke="#1e293b" stroke-width="3"></circle>
+                        <circle cx="18" cy="18" r="15.5" fill="none" stroke="var(--bg-surface-elevated)" stroke-width="3"></circle>
                         <circle id="cpu-ring" cx="18" cy="18" r="15.5" fill="none" stroke="#38bdf8" stroke-width="3"
                                 stroke-linecap="round" stroke-dasharray="97.4" stroke-dashoffset="97.4"
                                 class="transition-all duration-700"></circle>
@@ -295,7 +312,7 @@
                 <!-- SVG 圆环 -->
                 <div class="relative w-20 h-20 flex-shrink-0">
                     <svg class="w-full h-full -rotate-90" viewBox="0 0 36 36">
-                        <circle cx="18" cy="18" r="15.5" fill="none" stroke="#1e293b" stroke-width="3"></circle>
+                        <circle cx="18" cy="18" r="15.5" fill="none" stroke="var(--bg-surface-elevated)" stroke-width="3"></circle>
                         <circle id="mem-ring" cx="18" cy="18" r="15.5" fill="none" stroke="#34d399" stroke-width="3"
                                 stroke-linecap="round" stroke-dasharray="97.4" stroke-dashoffset="97.4"
                                 class="transition-all duration-700"></circle>
@@ -327,7 +344,7 @@
                 <!-- SVG 圆环 -->
                 <div class="relative w-20 h-20 flex-shrink-0">
                     <svg class="w-full h-full -rotate-90" viewBox="0 0 36 36">
-                        <circle cx="18" cy="18" r="15.5" fill="none" stroke="#1e293b" stroke-width="3"></circle>
+                        <circle cx="18" cy="18" r="15.5" fill="none" stroke="var(--bg-surface-elevated)" stroke-width="3"></circle>
                         <circle id="gpu-ring" cx="18" cy="18" r="15.5" fill="none" stroke="#fb923c" stroke-width="3"
                                 stroke-linecap="round" stroke-dasharray="97.4" stroke-dashoffset="97.4"
                                 class="transition-all duration-700"></circle>
@@ -428,6 +445,38 @@
                         />
                     </div>
                 </div>
+                <div class="flex justify-between items-center">
+                    <label class="text-sm text-slate-300" for="g-max-step">
+                        最大步长
+                        <span class="inline-flex items-center justify-center w-4 h-4 text-[10px] bg-slate-600 rounded-full cursor-help ml-1"
+                              title="单次调整 PWM 的最大变化量（0=不限制），防止风扇突然加速/减速">?</span>
+                    </label>
+                    <div class="flex items-center gap-2">
+                        <input
+                                id="g-max-step"
+                                class="w-16 bg-slate-800 border border-slate-600 rounded-md px-2 py-1 text-sm text-center text-sky-400 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                                type="number"
+                                min="0"
+                                max="255"
+                        />
+                    </div>
+                </div>
+                <div class="flex justify-between items-center">
+                    <label class="text-sm text-slate-300" for="g-min-hold">
+                        保持时间 (秒)
+                        <span class="inline-flex items-center justify-center w-4 h-4 text-[10px] bg-slate-600 rounded-full cursor-help ml-1"
+                              title="每次调整 PWM 后需等待至少此秒数才能再次调整，减少频繁调节">?</span>
+                    </label>
+                    <div class="flex items-center gap-2">
+                        <input
+                                id="g-min-hold"
+                                class="w-16 bg-slate-800 border border-slate-600 rounded-md px-2 py-1 text-sm text-center text-sky-400 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                                type="number"
+                                min="0"
+                                max="120"
+                        />
+                    </div>
+                </div>
             </div>
             <div class="space-y-4">
                 <div class="flex justify-between items-center">
@@ -475,6 +524,39 @@
                                 max="255"
                         />
                         <span class="text-xs text-slate-500">0–255</span>
+                    </div>
+                </div>
+                <div class="flex justify-between items-center">
+                    <label class="text-sm text-slate-300" for="g-temp-deviance">
+                        温度变化阈值 (°C)
+                        <span class="inline-flex items-center justify-center w-4 h-4 text-[10px] bg-slate-600 rounded-full cursor-help ml-1"
+                              title="Standard 算法：温度变化超过此值才触发风扇调整，默认2°C">?</span>
+                    </label>
+                    <div class="flex items-center gap-2">
+                        <input
+                                id="g-temp-deviance"
+                                class="w-16 bg-slate-800 border border-slate-600 rounded-md px-2 py-1 text-sm text-center text-sky-400 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                                type="number"
+                                min="0"
+                                max="10"
+                                step="0.5"
+                        />
+                    </div>
+                </div>
+                <div class="flex justify-between items-center">
+                    <label class="text-sm text-slate-300" for="g-response-delay">
+                        响应延迟 (秒)
+                        <span class="inline-flex items-center justify-center w-4 h-4 text-[10px] bg-slate-600 rounded-full cursor-help ml-1"
+                              title="Standard 算法：温度持续超出阈值此秒数后才执行调整，默认5秒">?</span>
+                    </label>
+                    <div class="flex items-center gap-2">
+                        <input
+                                id="g-response-delay"
+                                class="w-16 bg-slate-800 border border-slate-600 rounded-md px-2 py-1 text-sm text-center text-sky-400 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                                type="number"
+                                min="0"
+                                max="60"
+                        />
                     </div>
                 </div>
                 <div class="flex justify-between items-center">
@@ -619,6 +701,19 @@
                 <select id="fe-source"
                         class="flex-1 min-w-0 bg-slate-800 border border-slate-600 rounded px-3 py-2"></select>
             </div>
+            <div
+                    id="fe-algorithm-row"
+                    class="flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-4"
+            >
+                <label for="fe-algorithm" class="text-slate-400 text-xs sm:w-44 flex-shrink-0 pt-2 leading-snug">调速算法<br/><span
+                        class="text-slate-600">（直通、标准、EMA）</span></label>
+                <select id="fe-algorithm"
+                        class="flex-1 min-w-0 bg-slate-800 border border-slate-600 rounded px-3 py-2">
+                    <option value="identity">直通（原始温度直接输出）</option>
+                    <option value="standard">标准（滞回 + 响应延迟）</option>
+                    <option value="ema">EMA（指数移动平均）</option>
+                </select>
+            </div>
         </div>
 
         <div class="mt-8 pt-6 border-t border-slate-700">
@@ -643,44 +738,6 @@
             </button>
             <button type="button" id="fe-save" class="px-4 py-2 rounded-lg bg-sky-600 text-sm text-white">
                 保存设置与曲线
-            </button>
-        </div>
-    </div>
-</dialog>
-
-<!-- API Key 设置弹窗 -->
-<dialog
-        id="auth-dialog"
-        class="rounded-2xl bg-slate-900 text-slate-100 border border-slate-600 p-0 backdrop:bg-black/60 max-w-md w-[92vw]"
->
-    <div class="p-6">
-        <div class="flex items-center gap-3 mb-4">
-            <div class="p-2 bg-sky-500/10 rounded-xl border border-sky-500/20">
-                <iconify-icon class="text-2xl text-sky-400" icon="mdi:key-variant"></iconify-icon>
-            </div>
-            <div>
-                <h3 class="text-lg font-bold" id="auth-dialog-title">API Key 设置</h3>
-                <p class="text-xs text-slate-500" id="auth-dialog-desc">首次使用，请确认或修改 API Key</p>
-            </div>
-        </div>
-        <div class="space-y-3">
-            <div>
-                <label for="auth-key-input" class="text-sm text-slate-400 block mb-1">API Key</label>
-                <input
-                        type="text"
-                        id="auth-key-input"
-                        class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2.5 font-mono text-sm text-sky-400 focus:outline-none focus:ring-1 focus:ring-sky-500"
-                        placeholder="请输入 API Key"
-                        spellcheck="false"
-                        autocomplete="off"
-                />
-            </div>
-            <p id="auth-error" class="text-xs text-red-400 hidden"></p>
-        </div>
-        <div class="flex justify-end gap-2 mt-6">
-            <button type="button" id="auth-confirm-btn"
-                    class="px-6 py-2.5 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white text-sm font-bold rounded-xl shadow-lg shadow-sky-500/20 transform active:scale-95 transition-all">
-                确认
             </button>
         </div>
     </div>

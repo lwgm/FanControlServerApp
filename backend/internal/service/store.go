@@ -92,8 +92,12 @@ func defaultConfig() model.Config {
 			StopHysteresis:   2,
 			UpdateIntervalMS: 2000,
 			EmergencyTemp:    80,
-			StopBehavior:     model.StopBehaviorSet,
+			StopBehavior:     model.StopBehaviorKeep,
 			StopPWM:          200,
+			MaxStep:          12,
+			MinHoldSec:       10,
+			TempDeviance:     2,
+			ResponseDelayMs:  5000,
 		},
 	}
 }
@@ -113,6 +117,9 @@ func normalizeConfig(cfg *model.Config) {
 		}
 		if cfg.Fans[i].Source == "" {
 			cfg.Fans[i].Source = "cpu"
+		}
+		if cfg.Fans[i].Algorithm == "" {
+			cfg.Fans[i].Algorithm = model.AlgorithmIdentity
 		}
 		sort.Slice(cfg.Fans[i].Curve, func(a, b int) bool {
 			return cfg.Fans[i].Curve[a].Temp < cfg.Fans[i].Curve[b].Temp

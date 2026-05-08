@@ -2,38 +2,38 @@ import "iconify-icon";
 import "./style.css";
 import * as echarts from "echarts";
 import {
-    authRequired,
-    confirmAuthSetup,
-    fetchAuthSetup,
     fetchConfig,
     fetchInfo,
     fetchScanFans,
-    getStoredToken,
-    initAuthMode,
     removeFan,
     saveConfig,
+    setFanAlgorithm,
     setFanCurve,
     setFanManualPWM,
     setFanMode,
     setGlobalConfig,
-    setStoredToken,
 } from "./api";
 import type {ConfigPayload, CurvePoint, FanConfig, GlobalConfig, ScannedFan, Telemetry} from "./types";
 
 const DEFAULT_CURVE: CurvePoint[] = [
     {temp: 30, pwm: 80},
     {temp: 55, pwm: 140},
-    {temp: 75, pwm: 255}
+    {temp: 75, pwm: 200},
+    {temp: 100, pwm: 255}
 ];
 
 const emptyGlobal = (): GlobalConfig => ({
     pwm_deadzone: 5,
     update_interval_ms: 2000,
     emergency_temp: 80,
-    stop_behavior: "set",
+    stop_behavior: "keep",
     stop_pwm: 200,
     stop_hysteresis: 2,
-    log_level: "info"
+    log_level: "info",
+    max_step: 12,
+    min_hold_sec: 10,
+    temp_deviance: 2,
+    response_delay_ms: 5000
 });
 
 let config: ConfigPayload = {fans: [], global: emptyGlobal()};
@@ -389,6 +389,11 @@ function syncFanCardsFromTelemetryOrRender() {
             fanSource.setAttribute("data-source", fan.source);
         }
 
+        const algoSelect = card.querySelector("[data-fan-algorithm]") as HTMLSelectElement | null;
+        if (algoSelect) {
+            algoSelect.value = fan.algorithm || "standard";
+        }
+
         const pwmDisplay = card.querySelector("[data-fan-pwm-display]") as HTMLElement | null;
         const range = card.querySelector('input[data-field="pwm-range"]') as HTMLInputElement | null;
         if (pwmDisplay) pwmDisplay.textContent = `${pwmVal} / 255`;
@@ -449,6 +454,12 @@ function renderFanCards() {
     <iconify-icon class="text-sky-400 flex-shrink-0" icon="mdi:chart-bell-curve"></iconify-icon>
     <span class="leading-tight">温度源: </span>
     <span data-fan-source class="leading-tight text-sky-300" data-source="${fan.source}">${getSourceLabel(fan.source)}</span>
+    <span class="leading-tight text-slate-500 mx-0.5">·</span>
+    <select data-fan-algorithm class="text-[10px] bg-slate-700/60 border border-slate-600/60 rounded px-1 py-0.5 text-slate-300 focus:outline-none focus:ring-1 focus:ring-sky-500">
+      <option value="identity" ${fan.algorithm === "identity" ? "selected" : ""}>直通</option>
+      <option value="standard" ${fan.algorithm === "standard" ? "selected" : ""}>标准</option>
+      <option value="ema" ${fan.algorithm === "ema" ? "selected" : ""}>EMA</option>
+    </select>
     <span class="leading-tight text-slate-500">· 齿轮编辑曲线</span>
   </div>
 </div>`;
@@ -616,7 +627,7 @@ function initFanCurveChartShell() {
         grid: {top: "10%", bottom: "15%", left: "10%", right: "10%"},
         xAxis: {
             min: 30,
-            max: 80,
+            max: 100,
             type: "value",
             axisLine: {lineStyle: {color: "#334155"}},
             splitLine: {lineStyle: {color: "rgba(51, 65, 85, 0.3)", type: "dashed"}},
@@ -746,7 +757,7 @@ function syncCurveToConfig() {
 
 function loadCurveIntoEditor() {
     const fan = config.fans.find(f => f.id === selectedCurveFanId);
-    curveData = fan ? curveToPairs(fan.curve?.length ? fan.curve : DEFAULT_CURVE) : [[35, 80], [75, 255]];
+    curveData = fan ? curveToPairs(fan.curve?.length ? fan.curve : DEFAULT_CURVE) : [[35, 80], [55, 140], [75, 200], [100, 255]];
     updateFanCurveDataAndGraphic();
 }
 
@@ -759,6 +770,10 @@ function fillGlobalForm() {
     ($("g-stop-pwm") as HTMLInputElement).value = String(g.stop_pwm);
     ($("g-hysteresis") as HTMLInputElement).value = String(g.stop_hysteresis);
     ($("g-log-level") as HTMLSelectElement).value = g.log_level || "info";
+    ($("g-max-step") as HTMLInputElement).value = String(g.max_step);
+    ($("g-min-hold") as HTMLInputElement).value = String(g.min_hold_sec);
+    ($("g-temp-deviance") as HTMLInputElement).value = String(g.temp_deviance);
+    ($("g-response-delay") as HTMLInputElement).value = String(Math.round(g.response_delay_ms / 1000));
     updateStopPWMRow();
 }
 
@@ -783,7 +798,11 @@ function readGlobalForm(): GlobalConfig {
         stop_behavior: stopBeh === "set" ? "set" : "keep",
         stop_pwm: clampPWM(Number(($("g-stop-pwm") as HTMLInputElement).value) || 200),
         stop_hysteresis: Math.max(0, Number(($("g-hysteresis") as HTMLInputElement).value) || 2),
-        log_level: ($("g-log-level") as HTMLSelectElement).value || "info"
+        log_level: ($("g-log-level") as HTMLSelectElement).value || "info",
+        max_step: Math.max(0, Math.min(255, Number(($("g-max-step") as HTMLInputElement).value) || 12)),
+        min_hold_sec: Math.max(0, Number(($("g-min-hold") as HTMLInputElement).value) || 10),
+        temp_deviance: Math.max(0, Number(($("g-temp-deviance") as HTMLInputElement).value) || 2),
+        response_delay_ms: Math.max(0, Number(($("g-response-delay") as HTMLInputElement).value) * 1000) || 5000
     };
 }
 
@@ -801,6 +820,8 @@ function openFanSettingsDialog(idx: number) {
     const src = $("fe-source") as HTMLSelectElement;
     src.innerHTML = renderSourceOptions(fan.source);
     src.value = fan.source;
+
+    ($("fe-algorithm") as HTMLSelectElement).value = fan.algorithm || "standard";
 
     initFanCurveChartShell();
     loadCurveIntoEditor();
@@ -822,22 +843,32 @@ function readFanFormIntoConfig(): FanConfig | null {
     fan.rpm_path = ($("fe-rpm") as HTMLInputElement).value.trim();
     fan.enable_path = ($("fe-en") as HTMLInputElement).value.trim();
     fan.source = ($("fe-source") as HTMLSelectElement).value;
+    fan.algorithm = ($("fe-algorithm") as HTMLSelectElement).value as "identity" | "standard" | "ema";
     return fan;
 }
 
 function bindFanRoot() {
     const root = $("fan-root");
+
+    /** 在 composed path（含 Shadow DOM）中查找匹配 selector 的元素 */
+    function composedClosest(ev: Event, selector: string): Element | null {
+        return (ev.composedPath?.() ?? []).find(el => (el as Element).matches?.(selector)) as Element | null ?? null;
+    }
+
     root.addEventListener("click", async ev => {
-        const t = ev.target as HTMLElement;
-        const row = t.closest("[data-fan-idx]") as HTMLElement | null;
-        const del = t.closest("[data-act=fan-delete]");
+        const row = composedClosest(ev, "[data-fan-idx]") as HTMLElement | null;
+        const del = composedClosest(ev, "[data-act=fan-delete]");
         if (del && row) {
             const id = row.dataset.fanId!;
             const name = config.fans.find(f => f.id === id)?.name ?? id;
             if (!(await openConfirm(`确定从配置中删除风扇「${name}」吗？`))) return;
             try {
                 await removeFan(id);
-                await refresh();
+                const idx = config.fans.findIndex(f => f.id === id);
+                if (idx >= 0) {
+                    config.fans.splice(idx, 1);
+                }
+                renderFanCards();
                 toast("已删除该风扇配置", "success");
             } catch (e) {
                 console.error(e);
@@ -845,12 +876,12 @@ function bindFanRoot() {
             }
             return;
         }
-        const gear = t.closest("[data-act=fan-settings]");
+        const gear = composedClosest(ev, "[data-act=fan-settings]");
         if (gear && row) {
             openFanSettingsDialog(Number(row.dataset.fanIdx));
             return;
         }
-        const modeBtn = t.closest("[data-mode]") as HTMLElement | null;
+        const modeBtn = composedClosest(ev, "[data-mode]") as HTMLElement | null;
         if (modeBtn && row) {
             const id = row.dataset.fanId!;
             const mode = modeBtn.dataset.mode as "manual" | "curve";
@@ -878,6 +909,27 @@ function bindFanRoot() {
             fan.manual_pwm = v;
             const span = row.querySelector("[data-fan-pwm-display]");
             if (span) span.textContent = `${v} / 255`;
+        }
+    });
+
+    // 算法切换
+    root.addEventListener("change", async ev => {
+        const t = ev.target as HTMLSelectElement;
+        if (!t.matches("[data-fan-algorithm]")) return;
+        const row = t.closest("[data-fan-idx]") as HTMLElement | null;
+        if (!row) return;
+        const id = row.dataset.fanId!;
+        const algorithm = t.value as "identity" | "standard" | "ema";
+        const fan = config.fans.find(f => f.id === id);
+        if (!fan || fan.algorithm === algorithm) return;
+        fan.algorithm = algorithm;
+        try {
+            await setFanAlgorithm(id, algorithm);
+            const labels: Record<string, string> = {identity: "直通", standard: "标准", ema: "EMA"};
+            toast(`算法已切换为 ${labels[algorithm]}`, "success");
+        } catch (e) {
+            console.error(e);
+            toast(String(e), "error");
         }
     });
 
@@ -957,7 +1009,8 @@ async function addScannedFansFromSelection() {
             mode: "curve",
             source: "cpu",
             manual_pwm: 120,
-            curve: DEFAULT_CURVE.map(c => ({...c}))
+            curve: DEFAULT_CURVE.map(c => ({...c})),
+            algorithm: "identity"
         };
         config.fans.push(fan);
         n++;
@@ -984,73 +1037,93 @@ async function refresh() {
     fillGlobalForm();
 }
 
-async function ensureAuth(): Promise<boolean> {
-    if (!authRequired) return true;
-    if (getStoredToken()) return true;
+// ============================================================
+// Theme Management
+// ============================================================
+const THEME_STORAGE_KEY = "fancontrol_theme";
+type ThemeMode = "auto" | "light" | "dark";
+let themeMode: ThemeMode = "auto";
+let colorSchemeMedia: MediaQueryList | null = null;
 
-    const setup = await fetchAuthSetup();
-    const dlg = $("auth-dialog") as HTMLDialogElement;
-    const input = $("auth-key-input") as HTMLInputElement;
-    const errEl = $("auth-error") as HTMLElement;
-    const title = $("auth-dialog-title") as HTMLElement;
-    const desc = $("auth-dialog-desc") as HTMLElement;
+function applyTheme(theme: string) {
+    document.documentElement.setAttribute("data-theme", theme);
+}
 
-    if (setup?.token) {
-        title.textContent = "首次设置 API Key";
-        desc.textContent = "系统已自动生成 API Key，确认后即可使用";
-        input.value = setup.token;
+function onSystemThemeChanged(event: MediaQueryListEvent) {
+    if (themeMode !== "auto") return;
+    applyTheme(event.matches ? "dark" : "light");
+}
+
+function setupThemeSync() {
+    if (!window.matchMedia) {
+        themeMode = "light";
+        applyTheme("light");
+        return;
+    }
+    colorSchemeMedia = window.matchMedia("(prefers-color-scheme: dark)");
+
+    // Load saved preference
+    const saved = localStorage.getItem(THEME_STORAGE_KEY) as ThemeMode | null;
+    if (saved === "light" || saved === "dark") {
+        themeMode = saved;
+        applyTheme(saved);
     } else {
-        title.textContent = "输入 API Key";
-        desc.textContent = "请输入服务器配置的 API Key";
-        input.value = "";
+        themeMode = "auto";
+        applyTheme(colorSchemeMedia.matches ? "dark" : "light");
     }
 
-    errEl.classList.add("hidden");
-    dlg.showModal();
+    if (typeof colorSchemeMedia.addEventListener === "function") {
+        colorSchemeMedia.addEventListener("change", onSystemThemeChanged);
+    } else if (typeof (colorSchemeMedia as any).addListener === "function") {
+        (colorSchemeMedia as any).addListener(onSystemThemeChanged);
+    }
 
-    return new Promise(resolve => {
-        const handler = async () => {
-            const key = input.value.trim();
-            if (!key) {
-                errEl.textContent = "请输入 API Key";
-                errEl.classList.remove("hidden");
-                return;
-            }
-            if (key.length < 32) {
-                errEl.textContent = "API Key 长度不得少于 32 个字符";
-                errEl.classList.remove("hidden");
-                return;
-            }
-
-            if (setup?.token) {
-                const ok = await confirmAuthSetup(key);
-                if (!ok) {
-                    errEl.textContent = "确认失败，请重试";
-                    errEl.classList.remove("hidden");
-                    return;
-                }
-            }
-
-            setStoredToken(key);
-            dlg.close();
-            btn.removeEventListener("click", handler);
-            resolve(true);
-        };
-        const btn = $("auth-confirm-btn");
-        btn.addEventListener("click", handler);
-    });
+    updateThemeIcon();
 }
+
+function cycleTheme() {
+    if (themeMode === "auto") {
+        themeMode = "light";
+        applyTheme("light");
+    } else if (themeMode === "light") {
+        themeMode = "dark";
+        applyTheme("dark");
+    } else {
+        themeMode = "auto";
+        if (colorSchemeMedia) {
+            applyTheme(colorSchemeMedia.matches ? "dark" : "light");
+        } else {
+            applyTheme("light");
+        }
+    }
+    localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+    updateThemeIcon();
+}
+
+function updateThemeIcon() {
+    const icon = document.getElementById("theme-icon") as HTMLElement | null;
+    if (!icon) return;
+    if (themeMode === "auto") {
+        icon.setAttribute("icon", "mdi:theme-light-dark");
+        (icon.parentElement as HTMLElement)?.setAttribute("title", "主题: 自动");
+    } else if (themeMode === "light") {
+        icon.setAttribute("icon", "mdi:white-balance-sunny");
+        (icon.parentElement as HTMLElement)?.setAttribute("title", "主题: 浅色");
+    } else {
+        icon.setAttribute("icon", "mdi:moon-waning-crescent");
+        (icon.parentElement as HTMLElement)?.setAttribute("title", "主题: 深色");
+    }
+}
+
+// ============================================================
 
 async function main() {
     updateSubtitleDate();
     window.setInterval(updateSubtitleDate, 1000);
 
-    await initAuthMode()
-    await ensureAuth();
-
-    window.addEventListener("auth-required", () => {
-        ensureAuth().then(() => refresh().catch(console.error));
-    });
+    // Initialize theme
+    setupThemeSync();
+    $("btn-theme").addEventListener("click", cycleTheme);
 
     $("btn-refresh").addEventListener("click", () => refresh().catch(console.error));
 
@@ -1109,11 +1182,28 @@ async function main() {
 
     await refresh();
 
+    // 3 秒轮询遥测数据（替代 WebSocket）
+    const POLL_INTERVAL = 3000;
+    let pollTimer: number | undefined;
+
+    async function pollTelemetry() {
+        try {
+            const info = await fetchInfo();
+            applyTelemetry(info);
+            $("ws-text").textContent = "3s";
+            ($("ws-text") as HTMLElement).className = "text-sky-400 text-sm font-mono";
+        } catch {
+            $("ws-text").textContent = "失败";
+            ($("ws-text") as HTMLElement).className = "text-red-400 text-sm font-mono";
+        }
+    }
+
+    pollTimer = window.setInterval(pollTelemetry, POLL_INTERVAL);
+
+    // WebSocket 连接代码保留备用
     function connectWs() {
         const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const token = getStoredToken();
-        const qs = authRequired && token ? `?token=${encodeURIComponent(token)}` : "";
-        const ws = new WebSocket(`${proto}//${window.location.host}/api/ws${qs}`);
+        const ws = new WebSocket(`${proto}//${window.location.host}/api/ws`);
         ws.addEventListener("open", () => {
             $("ws-text").textContent = "已连接";
             ($("ws-text") as HTMLElement).className = "text-sky-400 text-sm font-mono";
@@ -1131,8 +1221,7 @@ async function main() {
             window.setTimeout(connectWs, 1500);
         });
     }
-
-    connectWs();
+    // connectWs(); // 取消注释可切换为 WebSocket 模式
 }
 
 main().catch(err => {

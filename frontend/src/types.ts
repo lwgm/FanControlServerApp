@@ -22,6 +22,7 @@ export interface FanConfig {
     source: string;
     manual_pwm: number;
     curve: CurvePoint[];
+    algorithm: "identity" | "standard" | "ema";
 }
 
 export interface GlobalConfig {
@@ -32,6 +33,10 @@ export interface GlobalConfig {
     stop_pwm: number;
     stop_hysteresis: number;
     log_level: string;
+    max_step: number;
+    min_hold_sec: number;
+    temp_deviance: number;
+    response_delay_ms: number;
 }
 
 export interface ConfigPayload {
@@ -54,6 +59,7 @@ export interface FanRuntime {
     source: string;
     mode: "manual" | "curve";
     target_pwm: number;
+    algorithm: "identity" | "standard" | "ema";
 }
 
 export interface HistoryPoint {

@@ -1,0 +1,66 @@
+name: Windows Auto Release
+
+on:
+  push:
+    tags:
+      - 'v*-mod'          # 匹配 v1.0.0-mod 等
+      - 'mod-v*'          # 匹配 mod-v1.0.0
+
+jobs:
+  release:
+    name: Build and Release on Windows
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Install fnpack
+        shell: pwsh
+        run: |
+          Write-Host "Downloading fnpack for Windows..."
+          curl -L -o fnpack.exe "https://static2.fnnas.com/fnpack/fnpack-1.2.1-windows-amd64"
+          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.fnpack"
+          Move-Item fnpack.exe "$env:USERPROFILE\.fnpack\" -Force
+          # 添加到 PATH
+          echo "$env:USERPROFILE\.fnpack" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          # 验证
+          & "$env:USERPROFILE\.fnpack\fnpack.exe" --help
+
+      - name: Run build script
+        shell: pwsh
+        run: |
+          .\scripts\build.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Find and upload .fpk
+        shell: pwsh
+        run: |
+          $fpkFile = Get-ChildItem -Path . -Filter "*.fpk" -File | Select-Object -First 1
+          if (-not $fpkFile) {
+            Write-Error "未找到 .fpk 文件"
+            exit 1
+          }
+          Write-Host "找到安装包: $($fpkFile.Name)"
+          echo "FPK_PATH=$($fpkFile.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Create Release and Upload
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.FPK_PATH }}
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, 'mod') }}

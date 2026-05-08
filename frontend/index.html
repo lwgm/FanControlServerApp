@@ -714,6 +714,50 @@
                     <option value="ema">EMA（指数移动平均）</option>
                 </select>
             </div>
+
+            <!-- 算法参数：根据所选算法动态显示 -->
+            <div id="fe-algorithm-params" class="hidden flex flex-col gap-4 text-sm max-w-3xl">
+                <div class="border-t border-slate-700 pt-4">
+                    <h4 class="text-xs font-bold text-slate-400 mb-3 flex items-center gap-1">
+                        <iconify-icon class="text-sky-400" icon="mdi:tune-variant"></iconify-icon>
+                        算法参数
+                    </h4>
+                    <!-- EMA 参数 -->
+                    <div id="fe-params-ema" class="hidden flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-4">
+                        <label for="fe-alpha" class="text-slate-400 text-xs sm:w-44 flex-shrink-0 pt-2 leading-snug">
+                            EMA 平滑因子 (α)
+                            <br/><span class="text-slate-600">0~1，越小越平滑</span>
+                        </label>
+                        <div class="flex items-center gap-3 flex-1">
+                            <input type="range" id="fe-alpha" min="0.02" max="1" step="0.01" value="0.25"
+                                   class="flex-1 accent-sky-500"/>
+                            <span id="fe-alpha-val" class="text-sky-400 text-sm font-mono w-10 text-right">0.25</span>
+                        </div>
+                    </div>
+                    <!-- Standard 参数 -->
+                    <div id="fe-params-standard" class="hidden flex flex-col gap-3">
+                        <div class="flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-4">
+                            <label for="fe-temp-deviance" class="text-slate-400 text-xs sm:w-44 flex-shrink-0 pt-2 leading-snug">
+                                温度变化阈值
+                                <br/><span class="text-slate-600">超出此范围才响应 (°C)</span>
+                            </label>
+                            <input type="number" id="fe-temp-deviance"
+                                   class="w-20 bg-slate-800 border border-slate-600 rounded px-2 py-2 text-sm text-center text-sky-400 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                                   min="0" max="20" step="0.5" placeholder="全局"/>
+                        </div>
+                        <div class="flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-4">
+                            <label for="fe-response-delay" class="text-slate-400 text-xs sm:w-44 flex-shrink-0 pt-2 leading-snug">
+                                响应延迟
+                                <br/><span class="text-slate-600">温度超出后等待 (秒)</span>
+                            </label>
+                            <input type="number" id="fe-response-delay"
+                                   class="w-20 bg-slate-800 border border-slate-600 rounded px-2 py-2 text-sm text-center text-sky-400 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                                   min="0" max="30" step="1" placeholder="全局"/>
+                        </div>
+                    </div>
+                    <!-- 直通无参数 -->
+                </div>
+            </div>
         </div>
 
         <div class="mt-8 pt-6 border-t border-slate-700">

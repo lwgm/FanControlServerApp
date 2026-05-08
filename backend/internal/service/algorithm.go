@@ -87,13 +87,27 @@ func (e *EMAAlgorithm) FilterTemp(input TempFilterInput) float64 {
 	return e.Alpha*input.RawTemp + (1-e.Alpha)*input.LastAppliedTemp
 }
 
-// GetAlgorithm 根据算法类型返回对应的算法实例
-func GetAlgorithm(algoType model.AlgorithmType) FanAlgorithm {
+// AlgorithmParams 逐风扇算法参数
+type AlgorithmParams struct {
+	Alpha          float64 // EMA 平滑因子 (0~1)
+	TempDeviance   float64 // Standard 温度变化阈值 (°C)
+	ResponseDelayMs int    // Standard 响应延迟 (ms)
+}
+
+// GetAlgorithm 根据算法类型和参数返回对应的算法实例
+func GetAlgorithm(algoType model.AlgorithmType, params AlgorithmParams) FanAlgorithm {
 	switch algoType {
 	case model.AlgorithmStandard:
 		return &StandardAlgorithm{}
 	case model.AlgorithmEMA:
-		return NewEMAAlgorithm(0.25)
+		alpha := params.Alpha
+		if alpha <= 0 {
+			alpha = 0.25
+		}
+		if alpha > 1 {
+			alpha = 1
+		}
+		return &EMAAlgorithm{Alpha: alpha}
 	default:
 		return &IdentityAlgorithm{}
 	}

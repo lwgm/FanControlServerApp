@@ -44,16 +44,19 @@ type CurvePoint struct {
 }
 
 type FanConfig struct {
-	ID         string        `json:"id"`
-	Name       string        `json:"name"`
-	PWMPath    string        `json:"pwm_path"`
-	RPMPath    string        `json:"rpm_path"`
-	EnablePath string        `json:"enable_path"`
-	Mode       FanMode       `json:"mode"`
-	Source     string        `json:"source"`
-	ManualPWM  int           `json:"manual_pwm"`
-	Curve      []CurvePoint  `json:"curve"`
-	Algorithm  AlgorithmType `json:"algorithm"`
+	ID             string        `json:"id"`
+	Name           string        `json:"name"`
+	PWMPath        string        `json:"pwm_path"`
+	RPMPath        string        `json:"rpm_path"`
+	EnablePath     string        `json:"enable_path"`
+	Mode           FanMode       `json:"mode"`
+	Source         string        `json:"source"`
+	ManualPWM      int           `json:"manual_pwm"`
+	Curve          []CurvePoint  `json:"curve"`
+	Algorithm      AlgorithmType `json:"algorithm"`
+	Alpha          float64       `json:"alpha,omitempty"`           // EMA 平滑因子 (0~1)，默认 0.25
+	TempDeviance   float64       `json:"temp_deviance,omitempty"`   // Standard 温度变化阈值 (°C)，默认取全局
+	ResponseDelayMs int          `json:"response_delay_ms,omitempty"` // Standard 响应延迟 (ms)，默认取全局
 }
 
 type GlobalConfig struct {

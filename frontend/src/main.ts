@@ -785,6 +785,21 @@ function updateStopPWMRow() {
     }
 }
 
+function updateAlgorithmParamsVisibility() {
+    const algo = ($("fe-algorithm") as HTMLSelectElement).value;
+    const container = $("fe-algorithm-params");
+    if (!container) return;
+    if (algo === "identity") {
+        container.classList.add("hidden");
+        return;
+    }
+    container.classList.remove("hidden");
+    const emaRow = $("fe-params-ema");
+    const stdRow = $("fe-params-standard");
+    if (emaRow) emaRow.classList.toggle("hidden", algo !== "ema");
+    if (stdRow) stdRow.classList.toggle("hidden", algo !== "standard");
+}
+
 function clampPWM(v: number): number {
     return Math.max(0, Math.min(255, Math.round(v)));
 }
@@ -823,6 +838,23 @@ function openFanSettingsDialog(idx: number) {
 
     ($("fe-algorithm") as HTMLSelectElement).value = fan.algorithm || "standard";
 
+    // 填充算法参数
+    const alphaSlider = $("fe-alpha") as HTMLInputElement;
+    const alphaVal = $("fe-alpha-val");
+    if (fan.alpha != null) {
+        alphaSlider.value = String(fan.alpha);
+        alphaVal.textContent = String(fan.alpha);
+    } else {
+        alphaSlider.value = "0.25";
+        alphaVal.textContent = "0.25";
+    }
+    const devianceEl = $("fe-temp-deviance") as HTMLInputElement;
+    devianceEl.value = fan.temp_deviance != null ? String(fan.temp_deviance) : "";
+    const delayEl = $("fe-response-delay") as HTMLInputElement;
+    delayEl.value = fan.response_delay_ms != null ? String(Math.round(fan.response_delay_ms / 1000)) : "";
+
+    updateAlgorithmParamsVisibility();
+
     initFanCurveChartShell();
     loadCurveIntoEditor();
 
@@ -844,6 +876,16 @@ function readFanFormIntoConfig(): FanConfig | null {
     fan.enable_path = ($("fe-en") as HTMLInputElement).value.trim();
     fan.source = ($("fe-source") as HTMLSelectElement).value;
     fan.algorithm = ($("fe-algorithm") as HTMLSelectElement).value as "identity" | "standard" | "ema";
+
+    // 读取算法参数
+    const alphaV = parseFloat(($("fe-alpha") as HTMLInputElement).value);
+    fan.alpha = isNaN(alphaV) ? undefined : alphaV;
+
+    const devV = parseFloat(($("fe-temp-deviance") as HTMLInputElement).value);
+    fan.temp_deviance = isNaN(devV) ? undefined : devV;
+
+    const delayV = parseFloat(($("fe-response-delay") as HTMLInputElement).value);
+    fan.response_delay_ms = isNaN(delayV) ? undefined : Math.round(delayV * 1000);
     return fan;
 }
 
@@ -1152,6 +1194,14 @@ async function main() {
     });
 
     $("g-stop-beh").addEventListener("change", updateStopPWMRow);
+
+    // 算法切换时显示/隐藏参数
+    $("fe-algorithm").addEventListener("change", updateAlgorithmParamsVisibility);
+    // Alpha 滑块实时显示值
+    $("fe-alpha").addEventListener("input", () => {
+        const s = $("fe-alpha") as HTMLInputElement;
+        ($("fe-alpha-val") as HTMLElement).textContent = s.value;
+    });
 
     const fanDlg = $("fan-edit-dialog") as HTMLDialogElement;
     $("fe-close").addEventListener("click", () => fanDlg.close());

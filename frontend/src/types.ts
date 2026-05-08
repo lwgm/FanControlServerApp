@@ -23,6 +23,9 @@ export interface FanConfig {
     manual_pwm: number;
     curve: CurvePoint[];
     algorithm: "identity" | "standard" | "ema";
+    alpha?: number;                // EMA 平滑因子 (0~1)
+    temp_deviance?: number;        // Standard 温度变化阈值 (°C)
+    response_delay_ms?: number;    // Standard 响应延迟 (ms)
 }
 
 export interface GlobalConfig {

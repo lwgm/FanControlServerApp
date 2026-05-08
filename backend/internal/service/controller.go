@@ -232,12 +232,27 @@ func (c *Controller) calculateTargetPWM(fan model.FanConfig, global model.Global
 
 	var smoothedTemp float64
 	if temp != nil {
-		algo := GetAlgorithm(fan.Algorithm)
+		// 逐风扇算法参数：如果风扇未设置则回退到全局
+		fanDeviance := fan.TempDeviance
+		if fanDeviance <= 0 {
+			fanDeviance = global.TempDeviance
+		}
+		fanResponseDelay := fan.ResponseDelayMs
+		if fanResponseDelay <= 0 {
+			fanResponseDelay = global.ResponseDelayMs
+		}
+
+		algoParams := AlgorithmParams{
+			Alpha:           fan.Alpha,
+			TempDeviance:    fanDeviance,
+			ResponseDelayMs: fanResponseDelay,
+		}
+		algo := GetAlgorithm(fan.Algorithm, algoParams)
 
 		// 构建温度历史缓冲（Standard 算法需要）
 		historyBufSize := 0
-		if global.ResponseDelayMs > 0 && global.UpdateIntervalMS > 0 {
-			historyBufSize = (global.ResponseDelayMs + global.UpdateIntervalMS - 1) / global.UpdateIntervalMS
+		if fanResponseDelay > 0 && global.UpdateIntervalMS > 0 {
+			historyBufSize = (fanResponseDelay + global.UpdateIntervalMS - 1) / global.UpdateIntervalMS
 		}
 		if historyBufSize > 0 {
 			c.algoTempHistory[fan.ID] = append(c.algoTempHistory[fan.ID], *temp)
@@ -250,7 +265,7 @@ func (c *Controller) calculateTargetPWM(fan model.FanConfig, global model.Global
 			RawTemp:         *temp,
 			LastAppliedTemp: c.lastAlgoTemp[fan.ID],
 			TempHistory:     c.algoTempHistory[fan.ID],
-			Deviance:        global.TempDeviance,
+			Deviance:        fanDeviance,
 		}
 		smoothedTemp = algo.FilterTemp(input)
 		c.lastAlgoTemp[fan.ID] = smoothedTemp

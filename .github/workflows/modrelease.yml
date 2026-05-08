@@ -61,4 +61,3 @@ jobs:
         with:
           files: ${{ env.FPK_PATH }}
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, 'mod') }}
